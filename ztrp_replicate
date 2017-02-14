@@ -8,7 +8,6 @@ REPORT ztrp_replicate.
 TYPES: BEGIN OF ty_slt_meta,
          logging_tab   TYPE c LENGTH 30,
          subject_tab   TYPE c LENGTH 30,
-         last_sync_utc TYPE c LENGTH 26,
        END OF ty_slt_meta,
        BEGIN OF ty_tab_cols,
          col_name TYPE c LENGTH 30,
@@ -45,7 +44,7 @@ START-OF-SELECTION.
 *  <--  p2        text
 *----------------------------------------------------------------------*
 FORM sub_subject_tables .
-  SELECT logging_tab subject_tab last_sync_utc INTO TABLE gt_slt_tab FROM zsltmeta WHERE active = 'X'.
+  SELECT logging_tab subject_tab INTO TABLE gt_slt_tab FROM zsltmeta WHERE active = 'X'.
 ENDFORM.
 *&---------------------------------------------------------------------*
 *&      Form  SUB_GET_TARG_DB
