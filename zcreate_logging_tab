@@ -1,0 +1,196 @@
+*&---------------------------------------------------------------------*
+*& Report ZCREATE_LOGGING_TAB
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zcreate_logging_tab.
+
+DATA: gt_trp_tabs TYPE STANDARD TABLE OF zsltmeta.
+DATA: gv_pkg TYPE c LENGTH 30 VALUE '$TMP'.
+
+START-OF-SELECTION.
+
+  PERFORM sub_retrieve_trp_tabs.
+  PERFORM sub_create_tabs.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_RETRIEVE_TRP_TABS
+*&---------------------------------------------------------------------*
+*       FETCH ALL TABLES NAMES USED IN TRP
+*----------------------------------------------------------------------*
+FORM sub_retrieve_trp_tabs .
+  SELECT * INTO TABLE gt_trp_tabs FROM zsltmeta WHERE active = 'X' and logging_tab = 'Z00001820'.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_CREATE_TABS
+*&---------------------------------------------------------------------*
+*       CREATE TRP TABLES AND ACTIVE THEM ALL
+*----------------------------------------------------------------------*
+FORM sub_create_tabs .
+
+  DATA: ls_trp_tabs TYPE zsltmeta.
+  DATA: ls_tabl_inf TYPE rpy_tabl.
+  DATA: lt_tabl_fields_u TYPE STANDARD TABLE OF rpy_fiel_u.
+
+  DATA: lt_dd03p TYPE STANDARD TABLE OF dd03p.
+  DATA: ls_dd02v TYPE dd02v.
+  DATA: ls_dd09v TYPE dd09v.
+  DATA: ls_logging_tab_first_row TYPE dd03p.
+  DATA: ls_logging_tab_second_row TYPE dd03p.
+  DATA: ls_logging_tab_third_row TYPE dd03p.
+  DATA: ls_logging_tab_last_row TYPE dd03p.
+  FIELD-SYMBOLS: <fs_dd03p> TYPE dd03p.
+
+  DATA: lv_key_count TYPE i.
+
+  DATA: ls_dd02l type dd02l.
+
+
+
+  " set basic table info
+  ls_tabl_inf-language = sy-langu.
+  ls_tabl_inf-tablclass = 'TRANSP'.
+  ls_tabl_inf-mod_user = sy-uname.
+  ls_tabl_inf-mod_date = sy-datum.
+  ls_tabl_inf-mod_time = sy-uzeit.
+
+  " initialize logging table fixed row definition
+  ls_logging_tab_first_row-fieldname = 'IUUC_SEQUENCE'.
+  ls_logging_tab_first_row-position = 1.
+  ls_logging_tab_first_row-keyflag = 'X'.
+  ls_logging_tab_first_row-inttype = 'P'.
+  ls_logging_tab_first_row-intlen = 8.
+  ls_logging_tab_first_row-notnull = 'X'.
+  ls_logging_tab_first_row-datatype = 'DEC'.
+  ls_logging_tab_first_row-leng = 15.
+  ls_logging_tab_first_row-mask = 'DEC'.
+
+  ls_logging_tab_second_row-fieldname = 'IUUC_TIMESTAMP'.
+  ls_logging_tab_second_row-position = 2.
+  ls_logging_tab_second_row-inttype = 'C'.
+  ls_logging_tab_second_row-intlen = 52.
+  ls_logging_tab_second_row-datatype = 'CHAR'.
+  ls_logging_tab_second_row-leng = 26.
+  ls_logging_tab_second_row-mask = 'CHAR'.
+
+  ls_logging_tab_third_row-fieldname = 'IUUC_PROCESSED'.
+  ls_logging_tab_third_row-position = 3.
+  ls_logging_tab_third_row-inttype = 'X'.
+  ls_logging_tab_third_row-intlen = 2.
+  ls_logging_tab_third_row-datatype = 'INT2'.
+  ls_logging_tab_third_row-leng = 5.
+  ls_logging_tab_third_row-mask = 'INT2'.
+
+  ls_logging_tab_last_row-fieldname = 'IUUC_OPERAT_FLAG'.
+  ls_logging_tab_last_row-inttype = 'C'.
+  ls_logging_tab_last_row-intlen = 2.
+  ls_logging_tab_last_row-datatype = 'CHAR'.
+  ls_logging_tab_last_row-leng = 1.
+  ls_logging_tab_last_row-mask = 'CHAR'.
+
+
+  LOOP AT gt_trp_tabs INTO ls_trp_tabs.
+
+    CLEAR: lt_dd03p, ls_dd02v, lv_key_count.
+
+    ls_tabl_inf-tablname = ls_trp_tabs-logging_tab.
+
+    ls_logging_tab_first_row-tabname = ls_trp_tabs-logging_tab.
+    ls_logging_tab_second_row-tabname = ls_trp_tabs-logging_tab.
+    ls_logging_tab_third_row-tabname = ls_trp_tabs-logging_tab.
+    ls_logging_tab_last_row-tabname = ls_trp_tabs-logging_tab.
+
+    " create blank table without any fields
+    CALL FUNCTION 'RPY_TABLE_INSERT'
+      EXPORTING
+        table_name        = ls_trp_tabs-logging_tab
+        development_class = '$TMP'
+        tabl_inf          = ls_tabl_inf
+      TABLES
+        tabl_fields       = lt_tabl_fields_u
+      EXCEPTIONS
+        cancelled         = 1
+        already_exist     = 2
+        permission_error  = 3
+        name_not_allowed  = 4
+        name_conflict     = 5
+        db_access_error   = 6
+        OTHERS            = 7.
+    IF sy-subrc <> 0.
+      WRITE:/ 'TABLE CREATION FAILED: ', ls_trp_tabs-logging_tab.
+      CONTINUE.
+    ENDIF.
+
+    " get table structures definition
+    CALL FUNCTION 'DDIF_TABL_GET'
+      EXPORTING
+        name      = ls_trp_tabs-subject_tab
+      IMPORTING
+        dd02v_wa  = ls_dd02v
+      TABLES
+        dd03p_tab = lt_dd03p.
+
+    " reset table header settings
+    ls_dd02v-tabname = ls_trp_tabs-logging_tab.
+    ls_dd02v-clidep = ''.
+    ls_dd02v-ddlanguage = sy-langu.
+    ls_dd02v-ddtext = ls_trp_tabs-subject_tab.
+    ls_dd02v-as4user = sy-uname.
+    ls_dd02v-as4time = sy-uzeit.
+    ls_dd02v-as4date = sy-datum.
+    ls_dd02v-applclass = gv_pkg.
+    ls_dd02v-authclass = ''.
+    ls_dd02v-contflag = 'L'.
+
+    ls_dd09v-tabname = ls_trp_tabs-logging_tab.
+    ls_dd09v-tabart = 'APPL1'.
+    ls_dd09v-tabkat = 1.
+    ls_dd09v-pufferung = ''.
+
+
+
+    " refine fields
+    DELETE lt_dd03p WHERE keyflag NE 'X'.
+    LOOP AT lt_dd03p ASSIGNING <fs_dd03p>.
+      <fs_dd03p>-tabname = ls_trp_tabs-logging_tab.
+      <fs_dd03p>-keyflag = ''.
+      <fs_dd03p>-position = <fs_dd03p>-position + 3.
+    ENDLOOP.
+
+    " set last row position
+    lv_key_count = lines( lt_dd03p ).
+    ls_logging_tab_last_row-position = lv_key_count + 3 + 1.
+
+    INSERT ls_logging_tab_first_row INTO lt_dd03p INDEX 1.
+    INSERT ls_logging_tab_second_row INTO lt_dd03p INDEX 1.
+    INSERT ls_logging_tab_third_row INTO lt_dd03p INDEX 1.
+    APPEND ls_logging_tab_last_row TO lt_dd03p.
+
+    " save table definition
+    CALL FUNCTION 'DDIF_TABL_PUT'
+      EXPORTING
+        name      = ls_trp_tabs-logging_tab
+        dd02v_wa  = ls_dd02v
+        dd09l_wa  = ls_dd09v
+      TABLES
+        dd03p_tab = lt_dd03p.
+
+    CALL FUNCTION 'DDIF_TABL_ACTIVATE'
+      EXPORTING
+        name        = ls_trp_tabs-logging_tab
+      EXCEPTIONS
+        not_found   = 1
+        put_failure = 2
+        OTHERS      = 3.
+
+
+
+    IF sy-subrc <> 0.
+      WRITE:/ 'CREATE TABLE FAILED： ', ls_trp_tabs-logging_tab.
+    ELSE.
+      WRITE:/ 'CREATE TABLE SUCCESSFULLY ', ls_trp_tabs-logging_tab.
+    ENDIF.
+
+
+  ENDLOOP.
+
+ENDFORM.
