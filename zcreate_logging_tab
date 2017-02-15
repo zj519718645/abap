@@ -18,7 +18,7 @@ START-OF-SELECTION.
 *       FETCH ALL TABLES NAMES USED IN TRP
 *----------------------------------------------------------------------*
 FORM sub_retrieve_trp_tabs .
-  SELECT * INTO TABLE gt_trp_tabs FROM zsltmeta WHERE active = 'X' and logging_tab = 'Z00001820'.
+  SELECT * INTO TABLE gt_trp_tabs FROM zsltmeta WHERE active = 'X'.
 ENDFORM.
 *&---------------------------------------------------------------------*
 *&      Form  SUB_CREATE_TABS
