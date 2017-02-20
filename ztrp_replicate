@@ -3,11 +3,11 @@
 *&---------------------------------------------------------------------*
 *&
 *&---------------------------------------------------------------------*
-REPORT ztrp_replicate.
+REPORT zreplicate.
 
 TYPES: BEGIN OF ty_slt_meta,
-         logging_tab   TYPE c LENGTH 30,
-         subject_tab   TYPE c LENGTH 30,
+         logging_tab TYPE c LENGTH 30,
+         subject_tab TYPE c LENGTH 30,
        END OF ty_slt_meta,
        BEGIN OF ty_tab_cols,
          col_name TYPE c LENGTH 30,
@@ -44,7 +44,7 @@ START-OF-SELECTION.
 *  <--  p2        text
 *----------------------------------------------------------------------*
 FORM sub_subject_tables .
-  SELECT logging_tab subject_tab INTO TABLE gt_slt_tab FROM zsltmeta WHERE active = 'X'.
+  SELECT logging_tab subject_tab INTO TABLE gt_slt_tab FROM zsltmeta WHERE active = 'X' AND rep_req = 'X'.
 ENDFORM.
 *&---------------------------------------------------------------------*
 *&      Form  SUB_GET_TARG_DB
@@ -82,7 +82,6 @@ FORM sub_sync_trp .
 
   DATA: dyn_abap_tab TYPE REF TO data.
   FIELD-SYMBOLS: <fs_abap_tab_wa> TYPE any.
-  DATA: base_utc TYPE c LENGTH 26.
   DATA: ls_tar_db TYPE zreptgtdb.
 
   DATA: dyn_struct TYPE REF TO data.
@@ -141,7 +140,7 @@ FORM sub_sync_trp .
       SELECT * FROM (<fs_slt_tab>-logging_tab)
         WHERE iuuc_timestamp >= @ls_tar_db-latest_sync_utc AND iuuc_timestamp < @gv_curr_utc
         ORDER BY iuuc_timestamp ASCENDING
-        INTO CORRESPONDING FIELDS OF TABLE @<fs_tab>.
+        into corresponding fields of table @<fs_tab>.
 
       " if no change happend, ignore that table sync
       IF <fs_tab> IS INITIAL.
@@ -378,7 +377,6 @@ FORM sub_sync_trp .
 
 
   ENDLOOP.
-
 
 
 ENDFORM.
