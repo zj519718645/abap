@@ -1,0 +1,351 @@
+*&---------------------------------------------------------------------*
+*& Report  ZINITIAL_LOAD
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+REPORT zinitial_load.
+
+DATA: gt_subject_tabs TYPE STANDARD TABLE OF zsltmeta.
+DATA: gs_conn_info TYPE zreptgtdb.
+DATA: gv_conn TYPE c LENGTH 30 VALUE 'CD9'.
+DATA gv_sql_success_flag TYPE c VALUE 'T'.
+DATA: gv_curr_utc TYPE c LENGTH 26.
+
+
+
+PERFORM sub_get_basic_info.
+"PERFORM sub_create_tabs.
+PERFORM sub_copy_data.
+"PERFORM sub_truncate_data.
+
+*&---------------------------------------------------------------------*
+*&      Form  SUB_GET_BASIC_INFO
+*&---------------------------------------------------------------------*
+*       get TRP tables and second database info
+*----------------------------------------------------------------------*
+FORM sub_get_basic_info.
+
+  " get TRP table name
+  SELECT * INTO TABLE gt_subject_tabs FROM zsltmeta WHERE active = 'X'.
+  " get second database connection info
+  SELECT SINGLE * INTO gs_conn_info FROM zreptgtdb WHERE dbconnection = gv_conn.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_CREATE_TABS
+*&---------------------------------------------------------------------*
+*       create tables in remote HANA database
+*----------------------------------------------------------------------*
+FORM sub_create_tabs .
+
+  DATA: ls_subject_tabs TYPE zsltmeta.
+  DATA: lv_sql TYPE string.
+  DATA: lo_sql TYPE REF TO cl_sql_statement.
+  DATA: lo_conn TYPE REF TO cl_sql_connection.
+  DATA: lo_result TYPE REF TO cl_sql_result_set.
+  DATA: lo_sql_exc TYPE REF TO cx_sql_exception.
+  DATA: lo_parm_inv TYPE REF TO cx_parameter_invalid.
+  DATA: lv_err_str TYPE string.
+  DATA: lt_dd03p TYPE STANDARD TABLE OF dd03p.
+  DATA: ls_dd03p TYPE dd03p.
+  DATA: lv_row_num TYPE i.
+  DATA: lv_ddl_sql TYPE string.
+  DATA: lv_key_str TYPE string.
+  DATA: lv_col_def TYPE string.
+
+
+* Create connection to HANA
+  TRY.
+      CALL METHOD cl_sql_connection=>get_connection
+        EXPORTING
+          con_name = gs_conn_info-dbconnection
+        RECEIVING
+          con_ref  = lo_conn.
+    CATCH cx_sql_exception INTO lo_sql_exc.
+      lv_err_str = lo_sql_exc->get_text( ).
+      WRITE:/ ' ERROR: ', lv_err_str.
+      STOP.
+  ENDTRY.
+
+
+
+  CREATE OBJECT lo_sql
+    EXPORTING
+      con_ref = lo_conn.
+
+** Create schema in HANA
+*  lv_ddl_sql = `CREATE SCHEMA ` && gs_conn_info-schema_name && ` CASCADE`.
+**  lv_ddl_sql = `CREATE SCHEMA ` && gs_conn_info-schema_name.
+*  TRY.
+*      CALL METHOD lo_sql->execute_ddl
+*        EXPORTING
+*          statement = lv_ddl_sql.
+*      WRITE:/ 'Create Schema ',  gs_conn_info-schema_name, ' Successfully'.
+*    CATCH cx_sql_exception .
+*      WRITE:/ 'Create Schema Failed!!!'.
+*      STOP.
+*  ENDTRY.
+
+  LOOP AT gt_subject_tabs INTO ls_subject_tabs.
+
+    lv_row_num = sy-tabix.
+    CALL FUNCTION 'DDIF_TABL_GET'
+      EXPORTING
+        name      = ls_subject_tabs-subject_tab
+      TABLES
+        dd03p_tab = lt_dd03p.
+
+    DELETE lt_dd03p WHERE datatype = ''.
+    SORT lt_dd03p BY position ASCENDING.
+    lv_ddl_sql = `CREATE COLUMN TABLE "` && gs_conn_info-schema_name && `"."` && ls_subject_tabs-subject_tab && `" (`.
+    lv_key_str = `PRIMARY KEY (`.
+*   construct definition string
+    LOOP AT lt_dd03p INTO ls_dd03p.
+
+      " construct primary key definition
+      IF ls_dd03p-keyflag = 'X'.
+        lv_key_str = lv_key_str && ls_dd03p-fieldname && `,`.
+      ENDIF.
+      CASE ls_dd03p-datatype.
+        WHEN 'ACCP'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'CHAR'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'CLNT'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'CUKY'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'CURR'.
+          lv_col_def = `DECIMAL(` && ls_dd03p-leng && `, ` && ls_dd03p-decimals && `), `.
+        WHEN 'DF16_DEC'.
+          lv_col_def = `DECIMAL(` && ls_dd03p-leng && `, ` && ls_dd03p-decimals && `), `.
+        WHEN 'DF16_RAW'.
+          lv_col_def = `VARBINARY(` && ls_dd03p-intlen && `), `.
+        WHEN 'DF16_SCL'.
+          lv_col_def = `VARBINARY(` && ls_dd03p-intlen && `), `.
+        WHEN 'DF34_DEC'.
+          lv_col_def = `DECIMAL(` && ls_dd03p-leng && `, ` && ls_dd03p-decimals && `), `.
+        WHEN 'DF34_RAW'.
+          lv_col_def = `VARBINARY(` && ls_dd03p-intlen && `), `.
+        WHEN 'DF34_SCL'.
+          lv_col_def = `VARBINARY(` && ls_dd03p-intlen && `), `.
+        WHEN 'DATS'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'DEC '.
+          lv_col_def = `DECIMAL(` && ls_dd03p-leng && `, ` && ls_dd03p-decimals && `), `.
+        WHEN 'FLTP'.
+          lv_col_def = `DOUBLE, `.
+        WHEN 'INT1'.
+          lv_col_def = `SMALLINT, `.
+        WHEN 'INT2'.
+          lv_col_def = `SMALLINT, `.
+        WHEN 'INT4'.
+          lv_col_def = `INTEGER, `.
+        WHEN 'INT8'.
+          lv_col_def = `BIGINT, `.
+        WHEN 'LANG'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'NUMC'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'PREC'.
+          lv_col_def = `DECIMAL(` && ls_dd03p-leng && `, ` && ls_dd03p-decimals && `), `.
+        WHEN 'QUAN'.
+          lv_col_def = `DECIMAL(` && ls_dd03p-leng && `, ` && ls_dd03p-decimals && `), `.
+        WHEN 'RAW'.
+          IF ls_dd03p-leng < 7000.
+            lv_col_def = `VARBINARY(` && ls_dd03p-leng && `), `.
+          ELSE.
+            lv_col_def = `BLOB, `.
+          ENDIF.
+        WHEN 'LRAW'.
+          IF ls_dd03p-leng < 7000.
+            lv_col_def = `VARBINARY(` && ls_dd03p-leng && `), `.
+          ELSE.
+            lv_col_def = `BLOB, `.
+          ENDIF.
+        WHEN 'RAWSTRING'.
+          lv_col_def = `BLOB, `.
+        WHEN 'SSTRING'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'STRING'.
+          lv_col_def = `NCLOB, `.
+        WHEN 'TIMS'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'UNIT'.
+          lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+        WHEN 'VARC'.
+          IF ls_dd03p-leng < 7000.
+            lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+          ELSE.
+            lv_col_def = `BLOB, `.
+          ENDIF.
+        WHEN 'LCHR'.
+          IF ls_dd03p-leng < 7000.
+            lv_col_def = `NVARCHAR(` && ls_dd03p-leng && `), `.
+          ELSE.
+            lv_col_def = `BLOB, `.
+          ENDIF.
+        WHEN OTHERS.
+          lv_col_def = ''.
+      ENDCASE.
+
+
+      lv_ddl_sql = lv_ddl_sql && `"` && ls_dd03p-fieldname && `" ` && lv_col_def.
+
+    ENDLOOP.
+    SHIFT lv_key_str RIGHT DELETING TRAILING ','.
+    lv_ddl_sql = lv_ddl_sql && lv_key_str && `))`.
+
+
+    TRY.
+        CALL METHOD lo_sql->execute_ddl
+          EXPORTING
+            statement = lv_ddl_sql.
+        WRITE:/ lv_row_num, 'SUCCESS: ','table ', ls_subject_tabs-subject_tab, 'created successfully'.
+      CATCH cx_sql_exception INTO lo_sql_exc.
+        lv_err_str = lo_sql_exc->get_text( ).
+        WRITE:/ lv_row_num, ' ERROR: ', lv_err_str.
+    ENDTRY.
+
+  ENDLOOP.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_COPY_DATA
+*&---------------------------------------------------------------------*
+*       Copy data from TM to HANA
+*----------------------------------------------------------------------*
+FORM sub_copy_data .
+
+  DATA: lo_conn TYPE REF TO cl_sql_connection.
+  DATA: lo_sql_exc TYPE REF TO cx_sql_exception.
+  DATA: lv_err_str TYPE string.
+  DATA: lo_sql TYPE REF TO cl_sql_statement.
+  DATA: ls_subject_tabs TYPE zsltmeta.
+  DATA: lo_prepstmt TYPE REF TO cl_sql_prepared_statement.
+  DATA: lv_dml_sql TYPE string.
+  DATA: lv_col_clause TYPE string.
+  DATA: lv_value_clause TYPE string.
+  DATA: lt_dd03p TYPE STANDARD TABLE OF dd03p.
+  DATA: ls_dd03p TYPE dd03p.
+  DATA: lv_timestamp TYPE timestampl.
+
+  DATA: dyn_tab TYPE REF TO data.
+  FIELD-SYMBOLS: <fs_tab> TYPE STANDARD TABLE.
+  FIELD-SYMBOLS: <fs_wa> TYPE any.
+
+  TRY.
+      CALL METHOD cl_sql_connection=>get_connection
+        EXPORTING
+          con_name = gs_conn_info-dbconnection
+        RECEIVING
+          con_ref  = lo_conn.
+    CATCH cx_sql_exception INTO lo_sql_exc.
+      lv_err_str = lo_sql_exc->get_text( ).
+      WRITE:/ ' ERROR: ', lv_err_str.
+      EXIT.
+  ENDTRY.
+
+* lock related tables
+  PERFORM sub_lock_tabs.
+  IF gv_sql_success_flag = 'F'.
+    WRITE:/ 'Lock tables failed, please try later!'.
+    EXIT.
+  ENDIF.
+  GET TIME STAMP FIELD lv_timestamp.
+* Get current utc timestamp
+  WRITE lv_timestamp TO gv_curr_utc.
+  REPLACE ALL OCCURRENCES OF ',' IN gv_curr_utc WITH ''.
+  REPLACE ALL OCCURRENCES OF '.' IN gv_curr_utc WITH ''.
+  LOOP AT gt_subject_tabs INTO ls_subject_tabs.
+    CREATE DATA dyn_tab TYPE TABLE OF (ls_subject_tabs-subject_tab).
+    ASSIGN dyn_tab->* TO <fs_tab>.
+    SELECT * FROM (ls_subject_tabs-subject_tab) INTO TABLE @<fs_tab>.
+    IF <fs_tab> IS INITIAL.
+      CONTINUE.
+
+    ENDIF.
+    " insert into remote table
+    INSERT (ls_subject_tabs-subject_tab) CONNECTION (gs_conn_info-dbconnection) FROM TABLE <fs_tab>.
+    IF sy-subrc <> 0.
+      WRITE:/ sy-tabix, 'ERROR: ', ls_subject_tabs-subject_tab, ' loaded failed!'.
+      gv_sql_success_flag = 'F'.
+    ENDIF.
+  ENDLOOP.
+
+  " Update connection info in zreptgtdb If all tables loaded correctly
+  IF gv_sql_success_flag = 'T'.
+    UPDATE zreptgtdb SET init_load_utc = gv_curr_utc WHERE dbconnection = gs_conn_info-dbconnection.
+    UPDATE zreptgtdb SET latest_sync_utc = gv_curr_utc WHERE dbconnection = gs_conn_info-dbconnection.
+    WRITE:/ 'Initial load successfully.'.
+  ENDIF.
+
+  PERFORM sub_unlock_tabs.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_LOCK_TABS
+*&---------------------------------------------------------------------*
+*       Lock tables in to ensure data consistency
+*----------------------------------------------------------------------*
+FORM sub_lock_tabs .
+
+  DATA: ls_subject_tabs TYPE zsltmeta.
+
+  LOOP AT gt_subject_tabs INTO ls_subject_tabs.
+    CALL FUNCTION 'ENQUEUE_E_TABLE'
+      EXPORTING
+        mode_rstable   = 'E'
+        tabname        = ls_subject_tabs-subject_tab
+      EXCEPTIONS
+        foreign_lock   = 1
+        system_failure = 2
+        OTHERS         = 3.
+    IF sy-subrc <> 0.
+      gv_sql_success_flag = 'F'.
+      EXIT.
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_TRUNCATE_DATA
+*&---------------------------------------------------------------------*
+*       truncate existed data in HANA DB
+*----------------------------------------------------------------------*
+FORM sub_truncate_data .
+
+  DATA: ls_subject_tabs TYPE zsltmeta.
+
+  LOOP AT gt_subject_tabs INTO ls_subject_tabs.
+    DELETE FROM (ls_subject_tabs-subject_tab) CONNECTION (gs_conn_info-dbconnection).
+  ENDLOOP.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_UNLOCK_TABS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM sub_unlock_tabs .
+
+  DATA: ls_subject_tabs TYPE zsltmeta.
+
+  LOOP AT gt_subject_tabs INTO ls_subject_tabs.
+    CALL FUNCTION 'DEQUEUE_E_TABLE'
+      EXPORTING
+        mode_rstable = 'E'
+        tabname      = ls_subject_tabs-subject_tab.
+
+
+  ENDLOOP.
+
+ENDFORM.
