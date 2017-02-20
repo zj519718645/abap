@@ -1,0 +1,76 @@
+*&---------------------------------------------------------------------*
+*& Report  ZCREATE_SEQUENCES
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+REPORT zcreate_sequences.
+
+DATA: gt_seq_info TYPE STANDARD TABLE OF zsltmeta.
+
+
+
+START-OF-SELECTION.
+
+
+  PERFORM sub_get_seq_info.
+  PERFORM sub_create_sequence.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_GET_SEQ_INFO
+*&---------------------------------------------------------------------*
+*       GET SEQUENCE NAME AND TABLE NAME
+*----------------------------------------------------------------------*
+FORM sub_get_seq_info .
+  SELECT * INTO TABLE gt_seq_info FROM zsltmeta WHERE active = 'X' and rep_req = 'X'.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_CREATE_SEQUENCE
+*&---------------------------------------------------------------------*
+*       CREATE SEQUENCE
+*----------------------------------------------------------------------*
+FORM sub_create_sequence .
+
+  DATA: ls_seq_info TYPE zsltmeta.
+  DATA: lv_sql TYPE string.
+  DATA: lo_sql TYPE REF TO cl_sql_statement.
+  DATA: lo_result TYPE REF TO cl_sql_result_set.
+  DATA: lo_sql_exc TYPE REF TO cx_sql_exception.
+  DATA: lo_parm_inv TYPE REF TO cx_parameter_invalid.
+  DATA: lv_err_str TYPE string.
+
+  LOOP AT gt_seq_info INTO ls_seq_info.
+
+    CLEAR: lv_err_str.
+*------ create sequence -------------
+    lv_sql = `CREATE SEQUENCE ` && ls_seq_info-tab_sequence && ` START WITH 1 INCREMENT BY 1 NO MAXVALUE NO CYCLE`.
+
+    CREATE OBJECT lo_sql.
+
+    TRY.
+        CALL METHOD lo_sql->execute_ddl
+          EXPORTING
+            statement = lv_sql.
+        WRITE:/ sy-tabix, ' SUCCESS: ', lv_sql.
+      CATCH cx_sql_exception INTO lo_sql_exc.
+        lv_err_str = lo_sql_exc->get_text( ).
+        WRITE:/ sy-tabix, ' ERROR: ', lv_sql, lv_err_str.
+    ENDTRY.
+**------ drop sequence -------------
+*    lv_sql = `DROP SEQUENCE ` && ls_seq_info-tab_sequence.
+*
+*    CREATE OBJECT lo_sql.
+*
+*    TRY.
+*        CALL METHOD lo_sql->execute_ddl
+*          EXPORTING
+*            statement = lv_sql.
+*        WRITE:/ sy-tabix, ' SUCCESS: ', lv_sql.
+*      CATCH cx_sql_exception INTO lo_sql_exc.
+*        lv_err_str = lo_sql_exc->get_text( ).
+*        WRITE:/ sy-tabix, ' ERROR: ', lv_sql, lv_err_str.
+*    ENDTRY.
+
+  ENDLOOP.
+
+ENDFORM.
