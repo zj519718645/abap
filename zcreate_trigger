@@ -1,0 +1,284 @@
+*&---------------------------------------------------------------------*
+*& Report  ZCREATE_TRIGGER
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+REPORT zcreate_trigger.
+
+DATA: insert_suffix TYPE c LENGTH 5 VALUE '_INS'.
+DATA: delete_suffix TYPE c LENGTH 5 VALUE '_DEL'.
+DATA: update_suffix TYPE c LENGTH 5 VALUE '_UPD'.
+
+DATA: gt_trigger_info TYPE STANDARD TABLE OF zsltmeta.
+
+
+PERFORM sub_trigger_info.
+PERFORM sub_create_trigger.
+
+"PERFORM sub_drop_trigger.
+
+
+*&---------------------------------------------------------------------*
+*&      Form  SUB_TRIGGER_INFO
+*&---------------------------------------------------------------------*
+*       GET TRIGGER INFORMATION
+*----------------------------------------------------------------------*
+FORM sub_trigger_info .
+  SELECT * INTO TABLE gt_trigger_info FROM zsltmeta WHERE active = 'X' AND rep_req = 'X'.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_CREATE_TRIGGER
+*&---------------------------------------------------------------------*
+*       CREATE TRIGGER FOR TRE USED TABLES
+*----------------------------------------------------------------------*
+FORM sub_create_trigger .
+
+  DATA: ls_trigger_info TYPE zsltmeta.
+  DATA: lo_sql TYPE REF TO cl_sql_statement.
+  DATA: lo_sql_exc TYPE REF TO cx_sql_exception.
+  DATA: lo_parm_inv TYPE REF TO cx_parameter_invalid.
+  DATA: lv_err_str TYPE string.
+  DATA: lt_dd03p TYPE STANDARD TABLE OF dd03p.
+  DATA: ls_dd03p TYPE dd03p.
+  DATA: lv_when_con TYPE string.
+  DATA: lv_header TYPE string.
+  DATA: lv_body TYPE string.
+  DATA: lv_else_body TYPE string.
+  DATA: lv_ddl_sql TYPE string.
+  DATA: lv_if_statement TYPE string.
+  DATA: lv_row_num TYPE i.
+
+  CREATE OBJECT lo_sql.
+
+  LOOP AT gt_trigger_info INTO ls_trigger_info.
+
+    CLEAR: lt_dd03p.
+
+    lv_row_num = sy-tabix.
+
+    " get subject table info
+    CALL FUNCTION 'DDIF_TABL_GET'
+      EXPORTING
+        name      = ls_trigger_info-subject_tab
+      TABLES
+        dd03p_tab = lt_dd03p.
+
+*-------create insertion trigger--------
+    lv_header = `CREATE TRIGGER ` && ls_trigger_info-logging_tab && insert_suffix
+    && ` AFTER INSERT ON "` && ls_trigger_info-subject_tab && `" REFERENCING NEW AS NEW FOR EACH ROW MODE DB2SQL `.
+
+    " determinate when condition and lv_body
+    READ TABLE lt_dd03p INTO ls_dd03p WITH KEY position = 1.
+    IF ls_dd03p-datatype = 'CLNT'.
+      lv_when_con = `WHEN ( NEW.` && ls_dd03p-fieldname && ` = '` && sy-mandt && `' ) `.
+    ELSE.
+      lv_when_con = ' '.
+    ENDIF.
+
+    DELETE lt_dd03p WHERE keyflag <> 'X'.
+    DELETE lt_dd03p WHERE datatype = ''.
+    lv_body = `INSERT INTO ` && ls_trigger_info-logging_tab && ` VALUES ( ` && ls_trigger_info-tab_sequence
+    && `.NEXTVAL, VARCHAR_FORMAT(CURRENT_TIMESTAMP - CURRENT_TIMEZONE, 'YYYYMMDDHH24MISSFF7'), '0', `.
+    LOOP AT lt_dd03p INTO ls_dd03p.
+      lv_body = lv_body && `NEW.` && ls_dd03p-fieldname && `, `.
+    ENDLOOP.
+    lv_body = lv_body && `'I' ); `.
+
+    lv_ddl_sql = lv_header && lv_when_con && `BEGIN ATOMIC ` && lv_body && `END`.
+
+*    CREATE OBJECT lo_sql.
+
+    TRY.
+        CALL METHOD lo_sql->execute_ddl
+          EXPORTING
+            statement = lv_ddl_sql.
+        WRITE:/ lv_row_num, ' SUCCESS: ', lv_header.
+      CATCH cx_sql_exception INTO lo_sql_exc.
+        lv_err_str = lo_sql_exc->get_text( ).
+        WRITE:/ lv_row_num, ' ERROR: ', lv_header, lv_err_str.
+    ENDTRY.
+
+
+*-------create delete trigger--------
+    lv_header = `CREATE TRIGGER ` && ls_trigger_info-logging_tab && delete_suffix
+    && ` AFTER DELETE ON "` && ls_trigger_info-subject_tab && `" REFERENCING OLD AS OLD FOR EACH ROW MODE DB2SQL `.
+
+    " determinate when condition and lv_body
+    READ TABLE lt_dd03p INTO ls_dd03p WITH KEY position = 1.
+    IF ls_dd03p-datatype = 'CLNT'.
+      lv_when_con = `WHEN ( OLD.` && ls_dd03p-fieldname && ` = '` && sy-mandt && `' ) `.
+    ELSE.
+      lv_when_con = ' '.
+    ENDIF.
+
+    lv_body = `INSERT INTO ` && ls_trigger_info-logging_tab && ` VALUES ( ` && ls_trigger_info-tab_sequence
+    && `.NEXTVAL, VARCHAR_FORMAT(CURRENT_TIMESTAMP - CURRENT_TIMEZONE, 'YYYYMMDDHH24MISSFF7'), '0', `.
+    LOOP AT lt_dd03p INTO ls_dd03p.
+      lv_body = lv_body && `OLD.` && ls_dd03p-fieldname && `, `.
+    ENDLOOP.
+    lv_body = lv_body && `'D' ); `.
+
+    lv_ddl_sql = lv_header && lv_when_con && `BEGIN ATOMIC ` && lv_body && `END`.
+
+
+*    CREATE OBJECT lo_sql.
+
+    TRY.
+        CALL METHOD lo_sql->execute_ddl
+          EXPORTING
+            statement = lv_ddl_sql.
+        WRITE:/ lv_row_num, ' SUCCESS: ', lv_header.
+      CATCH cx_sql_exception INTO lo_sql_exc.
+        lv_err_str = lo_sql_exc->get_text( ).
+        WRITE:/ lv_row_num, ' ERROR: ', lv_header, lv_err_str.
+    ENDTRY.
+
+
+*-------create update trigger--------
+    lv_header = `CREATE TRIGGER ` && ls_trigger_info-logging_tab && update_suffix
+    && ` AFTER UPDATE ON "` && ls_trigger_info-subject_tab && `" REFERENCING OLD AS OLD NEW AS NEW FOR EACH ROW MODE DB2SQL `.
+
+    " determinate when condition and lv_body
+    READ TABLE lt_dd03p INTO ls_dd03p WITH KEY position = 1.
+    IF ls_dd03p-datatype = 'CLNT'.
+      lv_when_con = `WHEN ( OLD.` && ls_dd03p-fieldname && ` = '` && sy-mandt && `' ) `.
+    ELSE.
+      lv_when_con = ' '.
+    ENDIF.
+
+    lv_body = `INSERT INTO ` && ls_trigger_info-logging_tab && ` VALUES ( ` && ls_trigger_info-tab_sequence
+    && `.NEXTVAL, VARCHAR_FORMAT(CURRENT_TIMESTAMP - CURRENT_TIMEZONE, 'YYYYMMDDHH24MISSFF7'), '0', `.
+    " construct if statement
+    lv_if_statement = `IF `.
+    LOOP AT lt_dd03p INTO ls_dd03p.
+      lv_body = lv_body && `OLD.` && ls_dd03p-fieldname && `, `.
+      lv_if_statement = lv_if_statement && `NEW.` && ls_dd03p-fieldname && ` <> ` && `OLD.` && ls_dd03p-fieldname && ` OR `.
+    ENDLOOP.
+    lv_body = lv_body && `'D' ); `.
+    lv_if_statement = lv_if_statement && ` 1 = 0 `.
+
+    lv_body = lv_body && `INSERT INTO ` && ls_trigger_info-logging_tab && ` VALUES ( ` && ls_trigger_info-tab_sequence
+    && `.NEXTVAL, VARCHAR_FORMAT(CURRENT_TIMESTAMP - CURRENT_TIMEZONE, 'YYYYMMDDHH24MISSFF7'), '0', `.
+    LOOP AT lt_dd03p INTO ls_dd03p.
+      lv_body = lv_body && `NEW.` && ls_dd03p-fieldname && `, `.
+    ENDLOOP.
+    lv_body = lv_body && `'I' ); `.
+
+    " construct else body
+    lv_else_body = `INSERT INTO ` && ls_trigger_info-logging_tab && ` VALUES ( ` && ls_trigger_info-tab_sequence
+    && `.NEXTVAL, VARCHAR_FORMAT(CURRENT_TIMESTAMP - CURRENT_TIMEZONE, 'YYYYMMDDHH24MISSFF7'), '0', `.
+    LOOP AT lt_dd03p INTO ls_dd03p.
+      lv_else_body = lv_else_body && `NEW.` && ls_dd03p-fieldname && `, `.
+    ENDLOOP.
+    lv_else_body = lv_else_body && `'U' ); `.
+
+
+    lv_ddl_sql = lv_header && lv_when_con && `BEGIN ATOMIC ` && lv_if_statement && ` THEN `
+    && lv_body && ` ELSE ` && lv_else_body && `END IF; ` && `END`.
+
+
+*    CREATE OBJECT lo_sql.
+
+    TRY.
+        CALL METHOD lo_sql->execute_ddl
+          EXPORTING
+            statement = lv_ddl_sql.
+        WRITE:/ lv_row_num, ' SUCCESS: ', lv_header.
+      CATCH cx_sql_exception INTO lo_sql_exc.
+        lv_err_str = lo_sql_exc->get_text( ).
+        WRITE:/ lv_row_num, ' ERROR: ', lv_header, lv_err_str.
+    ENDTRY.
+
+
+
+
+
+**------ drop trigger -------------
+*    lv_ddl_sql = `DROP TRIGGER Z00003141_UPD`.
+*
+*    CREATE OBJECT lo_sql.
+*
+*    TRY.
+*        CALL METHOD lo_sql->execute_ddl
+*          EXPORTING
+*            statement = lv_ddl_sql.
+*        WRITE:/ sy-tabix, ' SUCCESS: ', lv_ddl_sql.
+*      CATCH cx_sql_exception INTO lo_sql_exc.
+*        lv_err_str = lo_sql_exc->get_text( ).
+*        WRITE:/ sy-tabix, ' ERROR: ', lv_ddl_sql, lv_err_str.
+*    ENDTRY.
+*
+
+
+  ENDLOOP.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_DROP_TRIGGER
+*&---------------------------------------------------------------------*
+*      drop triggers
+*----------------------------------------------------------------------*
+FORM sub_drop_trigger .
+
+  DATA: ls_trigger_info TYPE zsltmeta.
+  DATA: lo_sql TYPE REF TO cl_sql_statement.
+  DATA: lo_sql_exc TYPE REF TO cx_sql_exception.
+  DATA: lo_parm_inv TYPE REF TO cx_parameter_invalid.
+  DATA: lv_err_str TYPE string.
+  DATA: lt_dd03p TYPE STANDARD TABLE OF dd03p.
+  DATA: ls_dd03p TYPE dd03p.
+  DATA: lv_ddl_sql TYPE string.
+
+  CREATE OBJECT lo_sql.
+*------ drop trigger -------------
+  LOOP AT gt_trigger_info INTO ls_trigger_info.
+
+
+    lv_ddl_sql = `DROP TRIGGER ` && ls_trigger_info-logging_tab && `_INS`.
+
+
+
+    TRY.
+        CALL METHOD lo_sql->execute_ddl
+          EXPORTING
+            statement = lv_ddl_sql.
+        WRITE:/ sy-tabix, ' SUCCESS: ', lv_ddl_sql.
+      CATCH cx_sql_exception INTO lo_sql_exc.
+        lv_err_str = lo_sql_exc->get_text( ).
+        WRITE:/ sy-tabix, ' ERROR: ', lv_ddl_sql, lv_err_str.
+    ENDTRY.
+
+    lv_ddl_sql = `DROP TRIGGER ` && ls_trigger_info-logging_tab && `_DEL`.
+
+
+
+    TRY.
+        CALL METHOD lo_sql->execute_ddl
+          EXPORTING
+            statement = lv_ddl_sql.
+        WRITE:/ sy-tabix, ' SUCCESS: ', lv_ddl_sql.
+      CATCH cx_sql_exception INTO lo_sql_exc.
+        lv_err_str = lo_sql_exc->get_text( ).
+        WRITE:/ sy-tabix, ' ERROR: ', lv_ddl_sql, lv_err_str.
+    ENDTRY.
+
+    lv_ddl_sql = `DROP TRIGGER ` && ls_trigger_info-logging_tab && `_UPD`.
+
+
+
+    TRY.
+        CALL METHOD lo_sql->execute_ddl
+          EXPORTING
+            statement = lv_ddl_sql.
+        WRITE:/ sy-tabix, ' SUCCESS: ', lv_ddl_sql.
+      CATCH cx_sql_exception INTO lo_sql_exc.
+        lv_err_str = lo_sql_exc->get_text( ).
+        WRITE:/ sy-tabix, ' ERROR: ', lv_ddl_sql, lv_err_str.
+    ENDTRY.
+
+  ENDLOOP.
+
+ENDFORM.
