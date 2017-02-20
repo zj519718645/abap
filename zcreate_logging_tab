@@ -18,7 +18,7 @@ START-OF-SELECTION.
 *       FETCH ALL TABLES NAMES USED IN TRP
 *----------------------------------------------------------------------*
 FORM sub_retrieve_trp_tabs .
-  SELECT * INTO TABLE gt_trp_tabs FROM zsltmeta WHERE active = 'X'.
+  SELECT * INTO TABLE gt_trp_tabs FROM zsltmeta WHERE active = 'X' AND rep_req = 'X' AND logging_tab = 'Z00000824'.
 ENDFORM.
 *&---------------------------------------------------------------------*
 *&      Form  SUB_CREATE_TABS
@@ -42,7 +42,7 @@ FORM sub_create_tabs .
 
   DATA: lv_key_count TYPE i.
 
-  DATA: ls_dd02l type dd02l.
+  DATA: ls_dd02l TYPE dd02l.
 
 
 
@@ -150,19 +150,22 @@ FORM sub_create_tabs .
 
     " refine fields
     DELETE lt_dd03p WHERE keyflag NE 'X'.
+    DELETE lt_dd03p WHERE datatype = ''.
+    SORT lt_dd03p BY position ASCENDING.
     LOOP AT lt_dd03p ASSIGNING <fs_dd03p>.
       <fs_dd03p>-tabname = ls_trp_tabs-logging_tab.
       <fs_dd03p>-keyflag = ''.
-      <fs_dd03p>-position = <fs_dd03p>-position + 3.
+      <fs_dd03p>-position = sy-tabix + 3.
+      <fs_dd03p>-adminfield = ''.
     ENDLOOP.
 
     " set last row position
     lv_key_count = lines( lt_dd03p ).
     ls_logging_tab_last_row-position = lv_key_count + 3 + 1.
 
-    INSERT ls_logging_tab_first_row INTO lt_dd03p INDEX 1.
-    INSERT ls_logging_tab_second_row INTO lt_dd03p INDEX 1.
     INSERT ls_logging_tab_third_row INTO lt_dd03p INDEX 1.
+    INSERT ls_logging_tab_second_row INTO lt_dd03p INDEX 1.
+    INSERT ls_logging_tab_first_row INTO lt_dd03p INDEX 1.
     APPEND ls_logging_tab_last_row TO lt_dd03p.
 
     " save table definition
