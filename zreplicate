@@ -1,0 +1,401 @@
+*&---------------------------------------------------------------------*
+*& Report ZREPLICATE
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zreplicate.
+
+TYPES: BEGIN OF ty_slt_meta,
+         logging_tab TYPE c LENGTH 30,
+         subject_tab TYPE c LENGTH 30,
+       END OF ty_slt_meta,
+       BEGIN OF ty_tab_cols,
+         col_name TYPE c LENGTH 30,
+       END OF ty_tab_cols,
+       BEGIN OF ty_query,
+         dml_sql TYPE string,
+       END OF ty_query.
+
+
+*----------------------------------global variables definition-------------------------
+DATA: gt_slt_tab TYPE STANDARD TABLE OF ty_slt_meta.
+DATA: gt_tar_db TYPE STANDARD TABLE OF zreptgtdb.
+DATA: gv_curr_utc TYPE c LENGTH 26.
+DATA: gr_conn TYPE REF TO cl_sql_connection.
+DATA: gv_sql_success_flag TYPE c LENGTH 1.
+
+
+
+
+*======================================================================
+START-OF-SELECTION.
+*======================================================================
+
+  PERFORM sub_get_targ_db.
+  PERFORM sub_subject_tables.
+  PERFORM sub_sync_trp.
+  "PERFORM sub_sync_tabs.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_SUBJECT_TABLES
+*&---------------------------------------------------------------------*
+*       get slt target tables and logging table list
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM sub_subject_tables .
+  SELECT logging_tab subject_tab INTO TABLE gt_slt_tab FROM zsltmeta WHERE active = 'X' AND rep_req = 'X'.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_GET_TARG_DB
+*&---------------------------------------------------------------------*
+*       retrieve target HANA DB
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM sub_get_targ_db .
+  SELECT dbconnection init_load_utc schema_name latest_sync_utc INTO TABLE gt_tar_db FROM zreptgtdb.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SUB_SYNC_TRP
+*&---------------------------------------------------------------------*
+*       sync data with TRP SYSTEMS
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM sub_sync_trp .
+
+  FIELD-SYMBOLS: <fs_slt_tab> TYPE ty_slt_meta.
+  DATA: lv_timestamp TYPE timestampl.
+  GET TIME STAMP FIELD lv_timestamp.
+* Get current utc timestamp
+  WRITE lv_timestamp TO gv_curr_utc.
+  REPLACE ALL OCCURRENCES OF ',' IN gv_curr_utc WITH ''.
+  REPLACE ALL OCCURRENCES OF '.' IN gv_curr_utc WITH ''.
+  DATA: dyn_tab TYPE REF TO data.
+  FIELD-SYMBOLS: <fs_tab> TYPE STANDARD TABLE.
+  FIELD-SYMBOLS: <fs_wa> TYPE any.
+  FIELD-SYMBOLS: <fs_col> TYPE any.
+  FIELD-SYMBOLS: <fs_data> TYPE any.
+
+  DATA: dyn_abap_tab TYPE REF TO data.
+  FIELD-SYMBOLS: <fs_abap_tab_wa> TYPE any.
+  DATA: ls_tar_db TYPE zreptgtdb.
+
+  DATA: dyn_struct TYPE REF TO data.
+  FIELD-SYMBOLS: <fs_struct> TYPE any.
+
+  DATA: lr_logging_tab_des TYPE REF TO cl_abap_structdescr.
+  DATA: lt_logging_tab_fields TYPE abap_compdescr_tab.
+  DATA: ls_logging_tab_fields LIKE LINE OF lt_logging_tab_fields.
+  DATA: lr_subject_tab_des TYPE REF TO cl_abap_structdescr.
+  DATA: lt_subject_tab_fields TYPE abap_compdescr_tab.
+  DATA: ls_subject_tab_fields LIKE LINE OF lt_subject_tab_fields.
+  DATA: lt_query_tab TYPE STANDARD TABLE OF ty_query.
+  DATA: ls_query TYPE ty_query.
+  DATA: lv_dml_sql TYPE string.
+  DATA: lv_where_clause TYPE string.
+  DATA: lv_abap_where_clause TYPE string.
+  DATA: lv_col_clause TYPE string.
+  DATA: lv_value_clause TYPE string.
+  DATA: lv_cols_sum TYPE i.
+  DATA: lv_placeholder TYPE c LENGTH 1.
+  DATA: lv_stmt TYPE string.
+  DATA: lr_prepstmt_ref TYPE REF TO cl_sql_prepared_statement.
+  DATA: lt_comp_tab TYPE cl_abap_structdescr=>component_table.
+  DATA: lr_struct_type TYPE REF TO cl_abap_structdescr.
+  DATA: lo_sql_err TYPE REF TO cx_sql_exception.
+  DATA: lv_err_text TYPE string.
+
+
+
+* connect target database
+  LOOP AT gt_tar_db INTO ls_tar_db.
+
+    gv_sql_success_flag = 'S'.
+
+    CLEAR: lt_query_tab.
+    " create odbc connection
+    TRY.
+        CALL METHOD cl_sql_connection=>get_connection
+          EXPORTING
+            con_name = ls_tar_db-dbconnection
+          RECEIVING
+            con_ref  = gr_conn.
+      CATCH cx_sql_exception .
+        gv_sql_success_flag = 'F'.
+        EXIT.
+    ENDTRY.
+
+
+*   loop slt tables to replicate tables one by one
+    LOOP AT gt_slt_tab ASSIGNING <fs_slt_tab>.
+
+*     Check if error happen in inside loop
+      CHECK gv_sql_success_flag = 'S'.
+
+      CREATE DATA dyn_tab TYPE TABLE OF (<fs_slt_tab>-logging_tab).
+      ASSIGN dyn_tab->* TO <fs_tab>.
+
+      CREATE DATA dyn_abap_tab TYPE (<fs_slt_tab>-subject_tab).
+      ASSIGN dyn_abap_tab->* TO <fs_abap_tab_wa>.
+
+      " query the change logs between last sync and current utc time
+      SELECT * FROM (<fs_slt_tab>-logging_tab)
+        WHERE iuuc_timestamp >= @ls_tar_db-latest_sync_utc AND iuuc_timestamp < @gv_curr_utc
+        ORDER BY iuuc_timestamp ASCENDING
+        into corresponding fields of table @<fs_tab>.
+
+      " if no change happend, ignore that table sync
+      IF <fs_tab> IS INITIAL.
+        CONTINUE.
+      ENDIF.
+      " retrieve logging table structures and subject table structures
+      lr_logging_tab_des ?= cl_abap_typedescr=>describe_by_name( <fs_slt_tab>-logging_tab ).
+      lt_logging_tab_fields = lr_logging_tab_des->components.
+      " get columns sum
+      lv_cols_sum = lines( lt_logging_tab_fields ).
+
+      DELETE TABLE lt_logging_tab_fields WITH TABLE KEY name = 'IUUC_SEQUENCE'.
+      DELETE TABLE lt_logging_tab_fields WITH TABLE KEY name = 'IUUC_TIMESTAMP'.
+      DELETE TABLE lt_logging_tab_fields WITH TABLE KEY name = 'IUUC_PROCESSED'.
+      DELETE TABLE lt_logging_tab_fields WITH TABLE KEY name = 'IUUC_OPERAT_FLAG'.
+      lr_subject_tab_des ?= cl_abap_typedescr=>describe_by_name( <fs_slt_tab>-subject_tab ).
+      lt_subject_tab_fields = lr_subject_tab_des->components.
+
+      " construct the where clause according that fields in table
+      LOOP AT lt_logging_tab_fields INTO ls_logging_tab_fields.
+        IF sy-tabix = 1.
+          lv_where_clause = ` WHERE "` && ls_logging_tab_fields-name && `" = ? `.
+
+        ELSE.
+          lv_where_clause = lv_where_clause && ` AND "` && ls_logging_tab_fields-name && `" = ? `.
+        ENDIF.
+      ENDLOOP.
+
+      " create structure to hold data of each table
+      CALL METHOD lr_logging_tab_des->get_components
+        RECEIVING
+          p_result = lt_comp_tab.
+      DELETE TABLE lt_comp_tab WITH TABLE KEY name = 'IUUC_SEQUENCE'.
+      DELETE TABLE lt_comp_tab WITH TABLE KEY name = 'IUUC_TIMESTAMP'.
+      DELETE TABLE lt_comp_tab WITH TABLE KEY name = 'IUUC_PROCESSED'.
+      DELETE TABLE lt_comp_tab WITH TABLE KEY name = 'IUUC_OPERAT_FLAG'.
+
+      CALL METHOD cl_abap_structdescr=>get
+        EXPORTING
+          p_components = lt_comp_tab
+        RECEIVING
+          p_result     = lr_struct_type.
+      CREATE DATA dyn_struct TYPE HANDLE lr_struct_type.
+      ASSIGN dyn_struct->* TO <fs_struct>.
+
+      " construct the colomn clause and value clause
+      LOOP AT lt_subject_tab_fields INTO ls_subject_tab_fields.
+        IF sy-tabix = 1.
+          lv_col_clause = ` ("` && ls_subject_tab_fields-name.
+          lv_value_clause = ` VALUES (?`.
+        ELSE.
+          lv_value_clause = lv_value_clause && `,?`.
+          lv_col_clause = lv_col_clause && `","` && ls_subject_tab_fields-name.
+        ENDIF.
+      ENDLOOP.
+      lv_value_clause = lv_value_clause && `) `.
+      lv_col_clause = lv_col_clause && `") `.
+
+      " execute SQL one by one
+      LOOP AT <fs_tab> ASSIGNING <fs_wa>.
+        ASSIGN COMPONENT lv_cols_sum OF STRUCTURE <fs_wa> TO <fs_col>.
+        LOOP AT lt_logging_tab_fields INTO ls_logging_tab_fields.
+          ASSIGN COMPONENT ( sy-tabix + 3 ) OF STRUCTURE <fs_wa> TO <fs_data>.
+          "PERFORM sub_fill_condtab USING ls_logging_tab_fields-name 'EQ' <fs_data>.
+          CASE ls_logging_tab_fields-type_kind.
+            WHEN 'C'.
+              lv_placeholder = `'`.
+            WHEN 'N'.
+              lv_placeholder = `'`.
+            WHEN 'D'.
+              lv_placeholder = `'`.
+            WHEN 'T'.
+              lv_placeholder = `'`.
+            WHEN 'X'.
+              lv_placeholder = `'`.
+            WHEN OTHERS.
+              lv_placeholder = ``.
+          ENDCASE.
+          IF sy-tabix = 1.
+            lv_abap_where_clause = ls_logging_tab_fields-name && ` = ` && lv_placeholder && <fs_data> && lv_placeholder.
+          ELSE.
+            lv_abap_where_clause =  lv_abap_where_clause && ` AND ` && ls_logging_tab_fields-name && ` = ` && lv_placeholder && <fs_data> && lv_placeholder.
+          ENDIF.
+        ENDLOOP.
+
+        " move corresponding value to dynamic structure
+        MOVE-CORRESPONDING <fs_wa> TO <fs_struct>.
+
+        CASE <fs_col>.
+          WHEN 'I'.
+            " first query from TM, then insert into second database
+            SELECT SINGLE * INTO <fs_abap_tab_wa> FROM (<fs_slt_tab>-subject_tab) WHERE (lv_abap_where_clause).
+            lv_stmt = `INSERT INTO ` && `"` && ls_tar_db-schema_name && `"."` && <fs_slt_tab>-subject_tab && `"`
+            && lv_col_clause && lv_value_clause.
+            TRY.
+                CALL METHOD gr_conn->prepare_statement
+                  EXPORTING
+                    statement    = lv_stmt
+                  RECEIVING
+                    prepstmt_ref = lr_prepstmt_ref.
+              CATCH cx_sql_exception .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+            ENDTRY.
+            lr_prepstmt_ref->set_param_struct( REF #( <fs_abap_tab_wa> ) ).
+            TRY.
+                CALL METHOD lr_prepstmt_ref->execute_update( ).
+              CATCH cx_sql_exception INTO lo_sql_err.
+                lv_err_text = lo_sql_err->get_text( ).
+                gv_sql_success_flag = 'F'.
+                EXIT.
+              CATCH cx_parameter_invalid .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+            ENDTRY.
+            lr_prepstmt_ref->close( ).
+            "lv_dml_sql = 'INSERT INTO "' && LS_TAR_DB-SCHEMA_NAME && '"."' && <FS_SLT_TAB>-
+          WHEN 'D'.
+            " delete records in second database
+            lv_stmt = `DELETE FROM ` && `"` && ls_tar_db-schema_name && `"."` && <fs_slt_tab>-subject_tab && `"`
+            && lv_where_clause.
+            TRY.
+                CALL METHOD gr_conn->prepare_statement
+                  EXPORTING
+                    statement    = lv_stmt
+                  RECEIVING
+                    prepstmt_ref = lr_prepstmt_ref.
+              CATCH cx_sql_exception .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+            ENDTRY.
+
+            lr_prepstmt_ref->set_param_struct( REF #( <fs_struct> ) ).
+            TRY.
+                CALL METHOD lr_prepstmt_ref->execute_update( ).
+              CATCH cx_sql_exception .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+              CATCH cx_parameter_invalid .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+            ENDTRY.
+            lr_prepstmt_ref->close( ).
+
+          WHEN 'U'.
+            " first delete from second database, then insert the new record into second database
+            lv_stmt = `DELETE FROM ` && `"` && ls_tar_db-schema_name && `"."` && <fs_slt_tab>-subject_tab && `"`
+            && lv_where_clause.
+            TRY.
+                CALL METHOD gr_conn->prepare_statement
+                  EXPORTING
+                    statement    = lv_stmt
+                  RECEIVING
+                    prepstmt_ref = lr_prepstmt_ref.
+              CATCH cx_sql_exception .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+            ENDTRY.
+
+            lr_prepstmt_ref->set_param_struct( REF #( <fs_struct> ) ).
+            TRY.
+                CALL METHOD lr_prepstmt_ref->execute_update( ).
+              CATCH cx_sql_exception INTO DATA(l_sqlerr_ref).
+                gv_sql_success_flag = 'F'.
+                EXIT.
+              CATCH cx_parameter_invalid .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+            ENDTRY.
+            lr_prepstmt_ref->close( ).
+            SELECT SINGLE * INTO <fs_abap_tab_wa> FROM (<fs_slt_tab>-subject_tab) WHERE (lv_abap_where_clause).
+            lv_stmt = `INSERT INTO ` && `"` && ls_tar_db-schema_name && `"."` && <fs_slt_tab>-subject_tab && `"`
+            && lv_col_clause && lv_value_clause.
+
+            TRY.
+                CALL METHOD gr_conn->prepare_statement
+                  EXPORTING
+                    statement    = lv_stmt
+                  RECEIVING
+                    prepstmt_ref = lr_prepstmt_ref.
+              CATCH cx_sql_exception .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+            ENDTRY.
+
+            lr_prepstmt_ref->set_param_struct( REF #( <fs_abap_tab_wa> ) ).
+
+            TRY.
+                CALL METHOD lr_prepstmt_ref->execute_update( ).
+              CATCH cx_sql_exception .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+              CATCH cx_parameter_invalid .
+                gv_sql_success_flag = 'F'.
+                EXIT.
+            ENDTRY.
+
+            lr_prepstmt_ref->close( ).
+          WHEN OTHERS.
+        ENDCASE.
+
+        CLEAR: lv_abap_where_clause, <fs_abap_tab_wa>, lv_stmt, lr_prepstmt_ref.
+      ENDLOOP.
+
+      CLEAR: lr_logging_tab_des,lt_logging_tab_fields, <fs_tab>, lr_subject_tab_des, lv_cols_sum, lv_where_clause,
+      lr_subject_tab_des, lv_where_clause, lv_value_clause, lv_col_clause,lv_cols_sum, lt_comp_tab, lr_struct_type.
+
+
+    ENDLOOP.
+
+
+    " commit or rollback change
+    IF gv_sql_success_flag = 'S'.
+      WRITE:/ ls_tar_db-dbconnection && ` sync successfully!!!`.
+      TRY.
+          CALL METHOD gr_conn->commit.
+        CATCH cx_sql_exception .
+          WRITE:/ `commit failed`.
+      ENDTRY.
+      " disconnect
+      TRY.
+          CALL METHOD gr_conn->close.
+        CATCH cx_sql_exception .
+          WRITE:/ `unable to close the connection`.
+      ENDTRY.
+      " update latest sync date
+      UPDATE zreptgtdb SET latest_sync_utc = gv_curr_utc WHERE dbconnection = ls_tar_db-dbconnection.
+    ELSEIF gv_sql_success_flag = 'F'.
+      WRITE:/ ls_tar_db-dbconnection && ` sync failed!!!`.
+      TRY.
+          CALL METHOD gr_conn->rollback.
+        CATCH cx_sql_exception .
+          WRITE:/ `rollback failed!!`.
+      ENDTRY.
+      " disconnect
+      TRY.
+          CALL METHOD gr_conn->close.
+        CATCH cx_sql_exception .
+          WRITE:/ `unable to close the connection`.
+      ENDTRY.
+
+    ELSE.
+    ENDIF.
+
+
+
+
+
+  ENDLOOP.
+
+
+ENDFORM.
