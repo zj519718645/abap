@@ -1,0 +1,23 @@
+*&---------------------------------------------------------------------*
+*& Report ZCLEAR_LOGGING_TAB
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zclear_logging_tab.
+
+
+DATA: gt_conn_def TYPE STANDARD TABLE OF zreptgtdb.
+DATA: gs_conn_def TYPE zreptgtdb.
+DATA: gt_meta_inf TYPE STANDARD TABLE OF zsltmeta.
+DATA: gs_meta_inf TYPE zsltmeta.
+
+START-OF-SELECTION.
+
+  SELECT * FROM zreptgtdb INTO TABLE gt_conn_def.
+  SELECT * FROM zsltmeta INTO TABLE gt_meta_inf WHERE active = 'X' AND rep_req = 'X'.
+  SORT gt_conn_def BY latest_sync_utc ASCENDING.
+  READ TABLE gt_conn_def INTO gs_conn_def INDEX 1.
+
+  LOOP AT gt_meta_inf INTO gs_meta_inf.
+    DELETE FROM (gs_meta_inf-logging_tab) WHERE iuuc_timestamp < gs_conn_def-latest_sync_utc.
+  ENDLOOP.
