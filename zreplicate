@@ -1,5 +1,5 @@
 *&---------------------------------------------------------------------*
-*& Report ZREPLICATE
+*& Report ZTRP_REPLICATE
 *&---------------------------------------------------------------------*
 *&
 *&---------------------------------------------------------------------*
@@ -360,7 +360,7 @@ FORM sub_sync_trp .
 
     " commit or rollback change
     IF gv_sql_success_flag = 'S'.
-      WRITE:/ ls_tar_db-dbconnection && ` sync successfully!!!`.
+      "WRITE:/ ls_tar_db-dbconnection && ` sync successfully!!!`.
       TRY.
           CALL METHOD gr_conn->commit.
         CATCH cx_sql_exception .
