@@ -31,9 +31,14 @@ DATA: gv_sql_success_flag TYPE c LENGTH 1.
 START-OF-SELECTION.
 *======================================================================
 
-  PERFORM sub_get_targ_db.
+
   PERFORM sub_subject_tables.
-  PERFORM sub_sync_trp.
+  WHILE 1 = 1.
+    PERFORM sub_get_targ_db.
+    PERFORM sub_sync_trp.
+    CLEAR: gt_tar_db, gv_curr_utc, gr_conn, gv_sql_success_flag.
+  ENDWHILE.
+
   "PERFORM sub_sync_tabs.
 *&---------------------------------------------------------------------*
 *&      Form  SUB_SUBJECT_TABLES
@@ -239,6 +244,10 @@ FORM sub_sync_trp .
           WHEN 'I'.
             " first query from TM, then insert into second database
             SELECT SINGLE * INTO <fs_abap_tab_wa> FROM (<fs_slt_tab>-subject_tab) WHERE (lv_abap_where_clause).
+            " if no records found, insert keys to HANA table
+            IF sy-subrc <> 0.
+              MOVE-CORRESPONDING <fs_wa> TO <fs_abap_tab_wa>.
+            ENDIF.
             lv_stmt = `INSERT INTO ` && `"` && ls_tar_db-schema_name && `"."` && <fs_slt_tab>-subject_tab && `"`
             && lv_col_clause && lv_value_clause.
             TRY.
@@ -263,6 +272,8 @@ FORM sub_sync_trp .
                 EXIT.
             ENDTRY.
             lr_prepstmt_ref->close( ).
+
+
             "lv_dml_sql = 'INSERT INTO "' && LS_TAR_DB-SCHEMA_NAME && '"."' && <FS_SLT_TAB>-
           WHEN 'D'.
             " delete records in second database
@@ -318,6 +329,9 @@ FORM sub_sync_trp .
             ENDTRY.
             lr_prepstmt_ref->close( ).
             SELECT SINGLE * INTO <fs_abap_tab_wa> FROM (<fs_slt_tab>-subject_tab) WHERE (lv_abap_where_clause).
+            IF sy-subrc <> 0.
+              MOVE-CORRESPONDING <fs_wa> TO <fs_abap_tab_wa>.
+            ENDIF.
             lv_stmt = `INSERT INTO ` && `"` && ls_tar_db-schema_name && `"."` && <fs_slt_tab>-subject_tab && `"`
             && lv_col_clause && lv_value_clause.
 
@@ -374,6 +388,7 @@ FORM sub_sync_trp .
       ENDTRY.
       " update latest sync date
       UPDATE zreptgtdb SET latest_sync_utc = gv_curr_utc WHERE dbconnection = ls_tar_db-dbconnection.
+      COMMIT WORK AND WAIT.
     ELSEIF gv_sql_success_flag = 'F'.
       WRITE:/ ls_tar_db-dbconnection && ` sync failed!!!`.
       TRY.
